@@ -292,3 +292,178 @@
       })
       (var-set total-certifications new-certification-id)
       (ok new-certification-id))))
+
+;; Award a certification to a user (authorized issuers only)
+(define-public (award-certification (user principal) (certification-id uint))
+  (begin
+    (asserts! (not (is-contract-paused)) ERR-INVALID-INPUT)
+    (asserts! (is-authorized-issuer tx-sender) ERR-UNAUTHORIZED)
+    (asserts! (not (user-has-certification user certification-id)) ERR-INVALID-INPUT)
+    (asserts! (not (user-certification-limit-reached user)) ERR-LIMIT-EXCEEDED)
+    (match (get-certification-definition certification-id)
+      certification-def 
+      (begin
+        (asserts! (get active certification-def) ERR-CERTIFICATION-NOT-FOUND)
+        (asserts! (user-meets-certification-requirements user (get required-achievements-count certification-def)) ERR-INVALID-INPUT)
+        (create-or-update-user-profile user)
+        (map-set user-certifications {user: user, certification-id: certification-id} {
+          earned-at: (get-current-time),
+          issuer: tx-sender
+        })
+        (ok true))
+      ERR-CERTIFICATION-NOT-FOUND)))
+
+;; Deactivate a certification (issuer or owner only)
+(define-public (deactivate-certification (certification-id uint))
+  (begin
+    (asserts! (not (is-contract-paused)) ERR-INVALID-INPUT)
+    (match (get-certification-definition certification-id)
+      certification-def 
+      (begin
+        (asserts! (or (is-owner) (is-eq tx-sender (get issuer certification-def))) ERR-UNAUTHORIZED)
+        (map-set certifications certification-id
+          (merge certification-def {active: false}))
+        (ok true))
+      ERR-CERTIFICATION-NOT-FOUND)))
+
+;; Claim reward for an achievement (user only)
+(define-public (claim-achievement-reward (achievement-id uint))
+  (begin
+    (asserts! (not (is-contract-paused)) ERR-INVALID-INPUT)
+    (match (get-user-achievement tx-sender achievement-id)
+      user-achievement 
+      (begin
+        (asserts! (not (get claimed user-achievement)) ERR-REWARD-ALREADY-CLAIMED)
+        (match (get-achievement-definition achievement-id)
+          achievement-def 
+          (begin
+            (asserts! (get active achievement-def) ERR-ACHIEVEMENT-NOT-FOUND)
+            (let ((reward-amount (get reward-amount achievement-def)))
+              (asserts! (>= (var-get contract-balance) reward-amount) ERR-INSUFFICIENT-BALANCE)
+              (map-set user-achievements {user: tx-sender, achievement-id: achievement-id}
+                (merge user-achievement {claimed: true}))
+              (match (map-get? user-profiles tx-sender)
+                profile 
+                (map-set user-profiles tx-sender 
+                  (merge profile {total-rewards-claimed: (+ (get total-rewards-claimed profile) reward-amount)}))
+                true)
+              (var-set contract-balance (- (var-get contract-balance) reward-amount))
+              (ok reward-amount)))
+          ERR-ACHIEVEMENT-NOT-FOUND))
+      ERR-ACHIEVEMENT-NOT-FOUND)))
+
+;; Emergency pause all operations (owner only)
+(define-public (emergency-pause)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-UNAUTHORIZED)
+    (var-set contract-paused true)
+    (ok true)))
+
+;; Resume operations after emergency pause (owner only)
+(define-public (resume-operations)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-UNAUTHORIZED)
+    (var-set contract-paused false)
+    (ok true)))
+
+;; Fund the contract (owner only)
+(define-public (fund-contract (amount uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-UNAUTHORIZED)
+    (asserts! (> amount u0) ERR-INVALID-INPUT)
+    (var-set contract-balance (+ (var-get contract-balance) amount))
+    (ok (var-get contract-balance))))
+
+;; Withdraw contract funds (owner only)
+(define-public (withdraw-contract-funds (amount uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-UNAUTHORIZED)
+    (asserts! (> amount u0) ERR-INVALID-INPUT)
+    (asserts! (>= (var-get contract-balance) amount) ERR-INSUFFICIENT-BALANCE)
+    (var-set contract-balance (- (var-get contract-balance) amount))
+    (ok (var-get contract-balance))))
+
+;; === READ-ONLY FUNCTIONS ===
+
+;; Get user profile information
+(define-read-only (get-user-profile (user principal))
+  (map-get? user-profiles user))
+
+;; Get achievement definition
+(define-read-only (get-achievement (achievement-id uint))
+  (map-get? achievement-definitions achievement-id))
+
+;; Get certification definition
+(define-read-only (get-certification (certification-id uint))
+  (map-get? certifications certification-id))
+
+;; Check if user has specific achievement
+(define-read-only (has-achievement (user principal) (achievement-id uint))
+  (user-has-achievement user achievement-id))
+
+;; Check if user has specific certification
+(define-read-only (has-certification (user principal) (certification-id uint))
+  (user-has-certification user certification-id))
+
+;; Get contract statistics
+(define-read-only (get-contract-stats)
+  {
+    total-achievements: (var-get total-achievements),
+    total-certifications: (var-get total-certifications),
+    total-users: (var-get total-users),
+    contract-balance: (var-get contract-balance),
+    contract-paused: (var-get contract-paused)
+  })
+
+;; Get comprehensive user report
+(define-read-only (get-user-report (user principal))
+  (match (map-get? user-profiles user)
+    profile (tuple
+      (user user)
+      (profile (tuple
+        (total-achievements (get total-achievements profile))
+        (total-rewards-claimed (get total-rewards-claimed profile))
+        (total-points (get total-points profile))
+        (joined-at (get joined-at profile))
+        (last-activity (get last-activity profile))
+      ))
+      (contract-stats (tuple
+        (total-achievements (var-get total-achievements))
+        (total-certifications (var-get total-certifications))
+        (total-users (var-get total-users))
+        (contract-balance (var-get contract-balance))
+      ))
+    )
+    (tuple
+      (user user)
+      (profile (tuple
+        (total-achievements u0)
+        (total-rewards-claimed u0)
+        (total-points u0)
+        (joined-at u0)
+        (last-activity u0)
+      ))
+      (contract-stats (tuple
+        (total-achievements (var-get total-achievements))
+        (total-certifications (var-get total-certifications))
+        (total-users (var-get total-users))
+        (contract-balance (var-get contract-balance))
+      ))
+    )
+  )
+)
+
+;; Get issuer information
+(define-read-only (get-issuer-info (issuer principal))
+  (map-get? authorized-issuers issuer))
+
+;; Check contract health and status
+(define-read-only (get-contract-health)
+  {
+    paused: (var-get contract-paused),
+    balance: (var-get contract-balance),
+    total-achievements: (var-get total-achievements),
+    total-certifications: (var-get total-certifications),
+    total-users: (var-get total-users),
+    owner: CONTRACT-OWNER
+  })
