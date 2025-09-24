@@ -432,3 +432,38 @@
         (total-certifications (var-get total-certifications))
         (total-users (var-get total-users))
         (contract-balance (var-get contract-balance))
+      ))
+    )
+    (tuple
+      (user user)
+      (profile (tuple
+        (total-achievements u0)
+        (total-rewards-claimed u0)
+        (total-points u0)
+        (joined-at u0)
+        (last-activity u0)
+      ))
+      (contract-stats (tuple
+        (total-achievements (var-get total-achievements))
+        (total-certifications (var-get total-certifications))
+        (total-users (var-get total-users))
+        (contract-balance (var-get contract-balance))
+      ))
+    )
+  )
+)
+
+;; Get issuer information
+(define-read-only (get-issuer-info (issuer principal))
+  (map-get? authorized-issuers issuer))
+
+;; Check contract health and status
+(define-read-only (get-contract-health)
+  {
+    paused: (var-get contract-paused),
+    balance: (var-get contract-balance),
+    total-achievements: (var-get total-achievements),
+    total-certifications: (var-get total-certifications),
+    total-users: (var-get total-users),
+    owner: CONTRACT-OWNER
+  })
